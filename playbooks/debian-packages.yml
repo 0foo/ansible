@@ -28,6 +28,7 @@
       - tmux
       - git-lfs
       - sudo
+      - acl
       state: present
 
   - name: Install Docker Engine
@@ -81,8 +82,14 @@
       global: true
       state: present
 
+  - name: Check if tailscale is installed
+    stat:
+      path: /usr/bin/tailscale
+    register: tailscale_installed
+
   - name: Ensure tailscale service is enabled and started
     service:
       name: tailscaled
       state: started
       enabled: true
+    when: tailscale_installed.stat.exists
