@@ -1,0 +1,173 @@
+---
+# ============================================================================
+# sanitize.yml -- prepare golden-host for cloning
+# ============================================================================
+#
+# Strips per-machine identity so clones don't collide. Run immediately
+# before taking the "golden" snapshot, never as a routine converge step.
+#
+# KEPT:    /root/.ssh/authorized_keys  -- your access, identical across
+#          clones by design.
+# REMOVED: /etc/ssh/ssh_host_*         -- the server's own identity. Shared
+#          host keys make clones indistinguishable to SSH.
+#
+# Intended sequence:
+#   ansible-playbook sanitize.yml
+#   pct snapshot 101 golden          (on the Proxmox host, no reboot between)
+#   ansible-playbook converge.yml    (restore golden-host to a usable state)
+#
+# After sanitize, golden-host has no host keys and is off the tailnet.
+# Your next connection trips a known_hosts mismatch, so in inventory:
+#   golden-host ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+# ============================================================================
+
+- name: Sanitize golden image for cloning
+  hosts: golden-host
+  gather_facts: true
+
+  tasks:
+
+    # --- machine-id -------------------------------------------------------
+    # The most important one. Several DHCP clients derive their DUID from
+    # this, so clones sharing a machine-id can request the SAME lease from
+    # dnsmasq -- presenting as two hosts stealing each other's address.
+    # Must be EMPTY, not absent; an absent file breaks early boot.
+    - name: Blank /etc/machine-id
+      copy:
+        content: ""
+        dest: /etc/machine-id
+        force: yes
+        mode: '0444'
+
+    - name: Remove dbus machine-id
+      file:
+        path: /var/lib/dbus/machine-id
+        state: absent
+
+    # --- SSH host keys (NOT authorized_keys) ------------------------------
+    - name: Find SSH host keys
+      find:
+        paths: /etc/ssh
+        patterns: 'ssh_host_*'
+      register: host_keys
+
+    - name: Remove SSH host keys
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ host_keys.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Confirm authorized_keys survived
+      stat:
+        path: /root/.ssh/authorized_keys
+      register: auth_keys
+
+    - name: Fail loudly if access would be lost
+      fail:
+        msg: >-
+          /root/.ssh/authorized_keys is missing. Snapshotting now would
+          produce clones you cannot log into.
+      when: not auth_keys.stat.exists
+
+    # --- Tailscale node state ---------------------------------------------
+    # Cloning this means two machines claiming one tailnet identity, which
+    # causes flapping that's miserable to diagnose. Skipped cleanly if
+    # Tailscale isn't installed on this image.
+    - name: Check for tailscale state file
+      stat:
+        path: /var/lib/tailscale/tailscaled.state
+      register: ts_state
+
+    - name: Check for tailscaled unit
+      stat:
+        path: /usr/lib/systemd/system/tailscaled.service
+      register: ts_unit
+
+    - name: Stop tailscaled before clearing state
+      systemd:
+        name: tailscaled
+        state: stopped
+      when: ts_unit.stat.exists
+      failed_when: false
+
+    - name: Clear tailscale node state
+      file:
+        path: /var/lib/tailscale/tailscaled.state
+        state: absent
+      when: ts_state.stat.exists
+
+    - name: Note tailscale status
+      debug:
+        msg: >-
+          {{ 'Tailscale state cleared -- clones will need to join with an auth key.'
+             if ts_state.stat.exists
+             else 'No tailscale state found, nothing to clear.' }}
+
+    # --- DHCP leases -------------------------------------------------------
+    # A cloned lease makes the client ask for an address that already
+    # belongs to the machine it was cloned from. dnsmasq refuses and offers
+    # another, but first boot is slower and noisier.
+    - name: Clear DHCP lease files
+      shell: rm -f /var/lib/dhcp/*.leases /var/lib/dhcpcd/*.lease /var/lib/NetworkManager/*.lease
+      failed_when: false
+      changed_when: true
+
+    # --- Docker state (optional) ------------------------------------------
+    # Uncomment only if you DON'T want images baked into the golden image.
+    # Baking them in saves real provisioning time; clearing them keeps
+    # clones lean and free of stale container state.
+    #
+    # - name: Check for docker
+    #   stat:
+    #     path: /var/lib/docker
+    #   register: docker_dir
+    #
+    # - name: Stop docker
+    #   systemd:
+    #     name: docker
+    #     state: stopped
+    #   when: docker_dir.stat.exists
+    #   failed_when: false
+    #
+    # - name: Clear docker state
+    #   shell: rm -rf /var/lib/docker/*
+    #   when: docker_dir.stat.exists
+    #   changed_when: true
+
+    # --- Logs and history --------------------------------------------------
+    - name: Rotate and vacuum journal
+      shell: journalctl --rotate && journalctl --vacuum-time=1s
+      changed_when: true
+      failed_when: false
+
+    - name: Truncate log files
+      shell: find /var/log -type f -name '*.log' -exec truncate -s 0 {} \;
+      changed_when: true
+      failed_when: false
+
+    - name: Clear shell history
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /root/.bash_history
+        - /root/.ansible/tmp
+
+    # --- Hostname ----------------------------------------------------------
+    # NOT reset here -- Proxmox sets it from --hostname at clone time.
+    # What matters is remembering to PASS it, or every clone comes up as
+    # "golden-host" and they overwrite each other's DNS record in dnsmasq.
+    #
+    #   pct clone 101 <newid> --snapshot golden --full --hostname web01
+
+    - name: Report
+      debug:
+        msg:
+          - "Sanitized. Snapshot now, without rebooting first:"
+          - "  pct snapshot 101 golden"
+          - "Clone with an explicit hostname:"
+          - "  pct clone 101 <newid> --snapshot golden --full --hostname <name>"
+          - "This host now has no SSH host keys and is off the tailnet."
+          - "Re-run converge.yml to restore it."

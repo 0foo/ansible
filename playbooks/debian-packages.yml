@@ -1,95 +1,98 @@
 - name: Install core packages on Debian-based systems
-  hosts: debian
+  hosts: debian:!proxmox
   become: true
-
   tasks:
-  - name: Update apt cache
-    apt:
-      update_cache: true
-      cache_valid_time: 3600
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
 
-  - name: Install git
-    apt:
-      name: git
-      state: present
+    - name: Install git
+      apt:
+        name: git
+        state: present
 
-  - name: Install utility packages
-    apt:
-      name:
-      - openssl
-      - unzip
-      - lsof
-      - net-tools
-      - parted
-      - speedtest-cli
-      - tree
-      - tcpdump
-      - rclone
-      - tmux
-      - git-lfs
-      - sudo
-      - acl
-      state: present
+    - name: Install utility packages
+      apt:
+        name:
+          - openssl
+          - unzip
+          - lsof
+          - net-tools
+          - parted
+          - speedtest-cli
+          - tree
+          - tcpdump
+          - rclone
+          - tmux
+          - git-lfs
+          - sudo
+          - acl
+          - curl
+          - wget
+          - rsync
+        state: present
 
-  - name: Install Docker Engine
-    apt:
-      name:
-      - docker.io
-      - docker-cli
-      - docker-compose
-      - docker-buildx
-      state: present
+    - name: Install Docker Engine
+      apt:
+        name:
+          - docker.io
+          - docker-cli
+          - docker-compose
+          - docker-buildx
+        state: present
 
-  - name: Add user to docker group
-    user:
-      name: "{{ ansible_facts['user_id'] }}"
-      groups: docker
-      append: true
+    - name: Add user to docker group
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+      when: ansible_user != 'root'
 
-  - name: Check if AWS CLI is already installed
-    stat:
-      path: /usr/local/bin/aws
-    register: aws_cli_installed
+    - name: Check if AWS CLI is already installed
+      stat:
+        path: /usr/local/bin/aws
+      register: aws_cli_installed
 
-  - name: Download AWS CLI v2 installer
-    get_url:
-      url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
-      dest: /tmp/awscliv2.zip
-      mode: "0644"
-    when: not aws_cli_installed.stat.exists
+    - name: Download AWS CLI v2 installer
+      get_url:
+        url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+        dest: /tmp/awscliv2.zip
+        mode: "0644"
+      when: not aws_cli_installed.stat.exists
 
-  - name: Unarchive AWS CLI installer
-    unarchive:
-      src: /tmp/awscliv2.zip
-      dest: /tmp
-      remote_src: true
-    when: not aws_cli_installed.stat.exists
+    - name: Unarchive AWS CLI installer
+      unarchive:
+        src: /tmp/awscliv2.zip
+        dest: /tmp
+        remote_src: true
+      when: not aws_cli_installed.stat.exists
 
-  - name: Run AWS CLI installer
-    command: /tmp/aws/install
-    when: not aws_cli_installed.stat.exists
+    - name: Run AWS CLI installer
+      command: /tmp/aws/install
+      when: not aws_cli_installed.stat.exists
 
-  - name: Install Node.js and npm
-    apt:
-      name:
-      - nodejs
-      - npm
-      state: present
+    - name: Install Node.js and npm
+      apt:
+        name:
+          - nodejs
+          - npm
+        state: present
 
-  - name: Install Claude Code CLI via npm
-    community.general.npm:
-      name: "@anthropic-ai/claude-code"
-      global: true
-      state: present
+    - name: Install Claude Code CLI via npm
+      community.general.npm:
+        name: "@anthropic-ai/claude-code"
+        global: true
+        state: present
 
-  - name: Check if tailscale is installed
-    stat:
-      path: /usr/bin/tailscale
-    register: tailscale_installed
+    - name: Check if tailscale is installed
+      stat:
+        path: /usr/bin/tailscale
+      register: tailscale_installed
 
-  - name: Ensure tailscale service is enabled and started
-    service:
-      name: tailscaled
-      state: started
-      enabled: true
-    when: tailscale_installed.stat.exists
+    - name: Ensure tailscale service is enabled and started
+      service:
+        name: tailscaled
+        state: started
+        enabled: true
+      when: tailscale_installed.stat.exists

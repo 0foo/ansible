@@ -127,6 +127,29 @@
             command history "$@"
           fi
         }
+  - name: Ensure ~/.ssh exists
+    file:
+      path: "{{ ansible_facts['env']['HOME'] }}/.ssh"
+      state: directory
+      mode: "0700"
+
+  - name: Install ssh-agent autoload bash module
+    copy:
+      src: ../files/bash/ssh-agent-init.sh
+      dest: "{{ ansible_facts['env']['HOME'] }}/.config/bash/ssh-agent-init.sh"
+      mode: "0644"
+
+  - name: Source ssh-agent autoload module in interactive bash sessions
+    blockinfile:
+      path: "{{ ansible_facts['env']['HOME'] }}/.bashrc"
+      create: true
+      marker: "# {mark} ANSIBLE MANAGED BLOCK: ssh-agent-init"
+      block: |
+        # Start/reuse ssh-agent and load all ~/.ssh keys (interactive shells only)
+        case $- in
+          *i*) [ -f "$HOME/.config/bash/ssh-agent-init.sh" ] && source "$HOME/.config/bash/ssh-agent-init.sh" ;;
+        esac
+
   - name: Ensure ~/.bashrc sources ~/.bash_aliases
     blockinfile:
       path: "{{ ansible_facts['env']['HOME'] }}/.bashrc"
