@@ -31,7 +31,19 @@
           - curl
           - wget
           - rsync
+          - p7zip
+          - unar
+          - tar
+          - gzip
+          - bzip2
+          - xz-utils
+          - zstd
+          - file
         state: present
+
+    - name: Install fclones (not packaged in Debian repos)
+      apt:
+        deb: https://github.com/pkolaczk/fclones/releases/download/v0.35.0/fclones_0.35.0-1_amd64.deb
 
     - name: Install Docker Engine
       apt:
