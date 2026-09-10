@@ -33,6 +33,7 @@
           - rsync
           - p7zip
           - unar
+          - unrar-free
           - tar
           - gzip
           - bzip2
