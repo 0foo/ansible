@@ -2,7 +2,9 @@
 
 Ansible playbooks for bootstrapping personal machines and servers: shell environment/dotfiles, CLI tooling, and (optionally) GUI apps.
 
-Setting up a brand new machine (Tailscale, SSH config, inventory, first bootstrap run)? See [NEW_MACHINE_SETUP.md](NEW_MACHINE_SETUP.md).
+Setting up a brand new machine (Tailscale, SSH config, inventory, first bootstrap run)? See [NEW_MACHINE_SETUP.md](clutter/NEW_MACHINE_SETUP.md.old).
+
+Building or cloning from the `golden-host` golden image? See [GOLDEN_IMAGE.md](GOLDEN_IMAGE.md).
 
 ## Layout
 
