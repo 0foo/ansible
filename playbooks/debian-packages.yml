@@ -24,6 +24,7 @@
           - tree
           - tcpdump
           - rclone
+          - jq
           - tmux
           - git-lfs
           - sudo
