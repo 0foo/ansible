@@ -18,7 +18,7 @@ SSH into `proxmox` and run the promotion script:
 ssh proxmox
 ~/promote-golden.sh
 ```
-This sanitizes `golden-host` (strips machine-id, SSH host keys, Tailscale state, DHCP leases, logs — see `playbooks/sanitize-golden-image.yml`) and takes a Proxmox snapshot, printing the snapshot ID/name to use in the next step.
+This is a bash script living on `proxmox` itself (not part of this repo) that sanitizes `golden-host` (strips machine-id, SSH host keys, Tailscale state, DHCP leases, logs) and takes a Proxmox snapshot, printing the snapshot ID/name to use in the next step.
 
 ### 3. Clone a new host
 

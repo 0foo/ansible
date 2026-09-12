@@ -2,23 +2,26 @@
 
 Ansible playbooks for bootstrapping personal machines and servers: shell environment/dotfiles, CLI tooling, and (optionally) GUI apps.
 
-Setting up a brand new machine (Tailscale, SSH config, inventory, first bootstrap run)? See [NEW_MACHINE_SETUP.md](clutter/NEW_MACHINE_SETUP.md.old).
+Building or cloning from the `golden-host` golden image? See [GOLDEN_IMAGE.md](GOLDEN_IMAGE.md) — this is now the fast path for standing up a new host.
 
-Building or cloning from the `golden-host` golden image? See [GOLDEN_IMAGE.md](GOLDEN_IMAGE.md).
+Setting up a machine from scratch instead (Tailscale, SSH config, inventory, first bootstrap run — e.g. for a box that isn't cloned from `golden-host`)? The old manual walkthrough is archived at [clutter/NEW_MACHINE_SETUP.md.old](clutter/NEW_MACHINE_SETUP.md.old); its steps still match the current playbooks but it's no longer the primary path.
 
 ## Layout
 
 ```
 ansible.cfg                    # inventory path, python interpreter, etc.
-inventory/hosts.ini            # host groups: [nixos] and [debian]
+inventory/hosts.ini            # host groups: [nixos], [debian], [non_proxmox]
 playbooks/
   local-bootstrap.yml          # dotfiles/shell env — runs on ALL hosts, any OS
-  debian-packages.yml          # CLI packages — Debian/Ubuntu hosts only
-  debian-gui-packages.yml      # GUI apps — Debian/Ubuntu hosts only, opt-in
+  debian-packages.yml          # CLI packages — [debian] hosts except proxmox
+  debian-gui-packages.yml      # GUI apps — [debian] hosts, opt-in
+  debian-ssh.yml               # systemd linger for ssh-agent persistence — [debian] hosts
   ssh-key-github.yml           # installs a vaulted GitHub SSH key — runs on ALL hosts
+  wallet-aliases.yml           # crypto wallet bash aliases — scrooge-host only
 files/                         # source files copied out by local-bootstrap.yml
   bashrc
   bash/gui-module.sh
+  bash/ssh-agent-init.sh
   hyperjump/hyperjump.sh
 inventory/group_vars/all/vault.yml       # ansible-vault-encrypted secrets (e.g. the GitHub SSH key)
 .vault_pass                    # gitignored vault password file (see Secrets/Vault below)
@@ -32,16 +35,22 @@ Targets `hosts: all` — runs against every host in the inventory regardless of 
 - `~/.bashrc`, `~/.bash_aliases` (aliases + helper functions like `git_go`, `ssh_add_keyfile`)
 - the [hyperjump](files/hyperjump/README.md) directory-jump script into `~/.local/bin`
 - the GUI bash module into `~/.config/bash`
+- an ssh-agent autoload module into `~/.config/bash` (starts/reuses one `ssh-agent` per session and loads all `~/.ssh` keys into it)
 - shared/timestamped bash history settings
 
-All paths use `ansible_facts['env']['HOME']`, which is the **target host's** home directory (not the control machine's) — important since this repo runs against both `localhost` and remote hosts as different users (e.g. `root` on `borg-host`).
+All paths use `ansible_facts['env']['HOME']`, which is the **target host's** home directory (not the control machine's) — important since this repo runs against both `ansible_connection=local` hosts and remote hosts as different users (e.g. `root` on `borg-host`).
 
 ### `debian-packages.yml`
-Targets the `[debian]` inventory group. Requires `become: true` (sudo/root) since it installs system packages. Installs:
-- `git` and utility packages (`openssl`, `unzip`, `lsof`, `net-tools`, `parted`, `speedtest-cli`, `tree`, `tcpdump`, `rclone`)
-- Docker Engine (`docker.io`) and adds the connecting user to the `docker` group
+Targets the `[debian]` inventory group **except `proxmox`** (the hypervisor host itself doesn't need this tooling). Requires `become: true` (sudo/root) since it installs system packages. Installs:
+- `git` plus a long list of CLI utilities (`openssl`, `unzip`, `lsof`, `net-tools`, `parted`, `speedtest-cli`, `tree`, `tcpdump`, `rclone`, `tmux`, `git-lfs`, `sudo`, `acl`, `curl`, `wget`, `rsync`, `p7zip`, `unar`, `unrar-free`, `tar`, `gzip`, `bzip2`, `xz-utils`, `zstd`, `file`)
+- `fclones` (duplicate-file finder, not packaged in Debian repos — installed from a downloaded `.deb`)
+- Docker Engine (`docker.io`, `docker-cli`, `docker-compose`, `docker-buildx`) and adds the connecting user to the `docker` group (skipped when connecting as `root`)
 - AWS CLI v2 (official installer, downloaded/unzipped/installed only if not already present)
 - Node.js/npm, then the Claude Code CLI (`@anthropic-ai/claude-code`) via npm
+- if Tailscale is already present on the host, ensures the `tailscaled` service is enabled/started (this playbook does not install Tailscale itself)
+
+### `debian-ssh.yml`
+Targets the `[debian]` inventory group. Requires `become: true`. Enables systemd linger for the connecting user (`loginctl enable-linger`) so their `ssh-agent` socket/session survives after the SSH connection that started it closes.
 
 ### `debian-gui-packages.yml`
 Also targets `[debian]`, but is **not** run by default — run it explicitly on hosts that need a desktop environment. Installs:
@@ -57,6 +66,9 @@ Targets `hosts: all`, `become: false` (writes only to the connecting user's `~/.
 - adds a `Host github.com` block to `~/.ssh/config` (`HostName github.com`, `User git`, `IdentityFile ~/.ssh/id_ed25519_github`)
 
 The private key itself lives encrypted in `inventory/group_vars/all/vault.yml` as the `github_ssh_private_key` variable — see **Secrets/Vault** below.
+
+### `wallet-aliases.yml`
+Targets `scrooge-host` only, `become: false`. Adds bash functions (`eth-bal`, `usdc-bal`, `wallet-summary`, gas-price/fee-estimate helpers, etc.) that wrap the Foundry `cast` CLI to check a crypto wallet's balances and estimate transaction fees. Assumes `cast` and the `my-wallet` keystore account are already set up on the host.
 
 ## Secrets / Vault
 
@@ -77,9 +89,10 @@ If you don't want a `.vault_pass` file at all, delete it and remove `vault_passw
 
 ## Inventory
 
-`inventory/hosts.ini` has two groups:
-- `[nixos]` — `localhost` (this machine, NixOS, `ansible_connection=local`). Package installs aren't run here — NixOS packages are managed declaratively via `/etc/nixos/configuration.nix`, not apt.
-- `[debian]` — remote Debian/Ubuntu hosts, connected to over SSH. Currently `borg-host`.
+`inventory/hosts.ini` has three groups:
+- `[nixos]` — NixOS laptops, one entry per OS user on each machine: `precision-5680-2023-root`/`precision-5680-2023-nick` and `xps13-root`/`xps13-nick`. Package installs aren't run here — NixOS packages are managed declaratively via `/etc/nixos/configuration.nix`, not apt.
+- `[debian]` — Debian/Ubuntu hosts: `borg-host` (the control machine itself, `ansible_connection=local`), plus remote hosts reached over SSH — `ai-host`, `scrooge-host`, `proxmox`, `document-host`, `golden-host`, `proxy-host`, and the `earlgrey-hetzner-vps-1/2/3` cloud boxes.
+- `[non_proxmox]` — the subset of the above that isn't hosted as a Proxmox VM/container (the three `earlgrey-hetzner-vps-*` hosts plus all four `[nixos]` entries). Not currently targeted by any playbook directly; it exists for host selection in ad-hoc commands (e.g. `--limit non_proxmox`).
 
 To add a remote host: connectivity requires SSH access (key-based) and Python 3 on the target (Ansible is agentless — nothing needs installing there beyond that). Add a line like:
 ```ini
